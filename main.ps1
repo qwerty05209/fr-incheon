@@ -3,38 +3,43 @@ $bootScript = 'C:\ProgramData\delete_jness_onboot.ps1'
 $taskName = 'Delete_JNESS_OnBoot'
 
 $results = Get-ChildItem -Path $targetPath -Filter *.exe -Recurse -Force -ErrorAction SilentlyContinue |
-  ForEach-Object {
+  Where-Object {
     try {
-      $full = $_.FullName
-      $sig = Get-AuthenticodeSignature -FilePath $full -ErrorAction SilentlyContinue
+      $sig = Get-AuthenticodeSignature -FilePath $_.FullName -ErrorAction SilentlyContinue
       $cert = $sig.SignerCertificate
-      $matches = $false
       if ($cert) {
-        foreach ($field in @($cert.Subject, $cert.Issuer, $cert.FriendlyName, $cert.GetName())) {
-          if ($field -and ($field -imatch 'JNESS')) { $matches = $true; break }
-        }
+        $cert.Subject -match 'JNESS' -or
+        $cert.Issuer -match 'JNESS' -or
+        $cert.FriendlyName -match 'JNESS' -or
+        $cert.GetName() -match 'JNESS'
       }
-      if ($matches) { $_.FullName }
-    } catch { }
-  }
+    } catch { $false }
+  } |
+  Select-Object -ExpandProperty FullName
 
-if (-not $results) { exit }
+if (-not $results) {
+  exit
+}
 
-@"
-\$files = @(
-$( $results | ForEach-Object { "`"$_`"" } | Out-String )
+$filesList = $results | ForEach-Object { "  `"`$_`"," }
+$joined = $filesList -join "`n"
+
+$scriptContent = @"
+`$files = @(
+$joined
 )
 
-foreach (\$f in \$files) {
+foreach (`$f in `$files) {
   try {
-    if (Test-Path \$f) {
-      Remove-Item -Path \$f -Force -ErrorAction SilentlyContinue
+    if (Test-Path `$f) {
+      Remove-Item -Path `$f -Force -ErrorAction SilentlyContinue
     }
   } catch {}
 }
-"@ | Set-Content -Path $bootScript -Encoding UTF8 -Force
+"@
 
+$scriptContent | Set-Content -Path $bootScript -Encoding UTF8 -Force
 try { schtasks /delete /tn $taskName /f | Out-Null } catch {}
 
-$cmd = "powershell.exe -ExecutionPolicy Bypass -NoProfile -File `"`"$bootScript`"`""
-Start-Process schtasks -ArgumentList "/create /tn `"$taskName`" /sc onstart /ru SYSTEM /rl HIGHEST /tr `"$cmd`"" -WindowStyle Hidden -Wait
+$cmd = "powershell.exe -ExecutionPolicy Bypass -NoProfile -File `"$bootScript`""
+schtasks /create /tn $taskName /sc onstart /ru SYSTEM /rl HIGHEST /tr $cmd /f
